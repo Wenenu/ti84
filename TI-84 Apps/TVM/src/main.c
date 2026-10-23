@@ -1,59 +1,137 @@
-#include <ti/screen.h>
 #include <ti/getcsc.h>
+#include <graphx.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 #include <stdbool.h>
+#include <string.h>
 
 #define EPS 1e-13L
 
+enum {
+    C_BG, C_PANEL, C_PANEL_2, C_BLUE, C_CYAN, C_WHITE, C_MUTED,
+    C_GREEN, C_RED, C_YELLOW
+};
+
+static const uint16_t ui_palette[] = {
+    gfx_RGBTo1555(8, 15, 29),
+    gfx_RGBTo1555(19, 31, 52),
+    gfx_RGBTo1555(29, 45, 70),
+    gfx_RGBTo1555(32, 102, 190),
+    gfx_RGBTo1555(66, 211, 226),
+    gfx_RGBTo1555(244, 248, 255),
+    gfx_RGBTo1555(157, 174, 198),
+    gfx_RGBTo1555(63, 210, 142),
+    gfx_RGBTo1555(245, 101, 101),
+    gfx_RGBTo1555(250, 204, 80)
+};
+
+static int ui_y;
+
+static void ui_text(const char *text, int x, int y, uint8_t color) {
+    gfx_SetTextFGColor(color);
+    gfx_SetTextTransparentColor(C_BG);
+    gfx_PrintStringXY(text, x, y);
+}
+
+static void ui_frame(const char *title, bool buffered) {
+    if (buffered) gfx_SetDrawBuffer(); else gfx_SetDrawScreen();
+    gfx_SetColor(C_BG); gfx_FillScreen(C_BG);
+    gfx_SetColor(C_BLUE); gfx_FillRectangle(0, 0, 320, 48);
+    gfx_SetColor(C_CYAN); gfx_FillRectangle(0, 46, 320, 2);
+    gfx_SetTextScale(1, 1);
+    ui_text("TVM EASY", 14, 8, C_CYAN);
+    ui_text(title, 14, 27, C_WHITE);
+    ui_y = 62;
+}
+
+static void ui_footer(const char *left, const char *right) {
+    gfx_SetColor(C_PANEL); gfx_FillRectangle(0, 218, 320, 22);
+    ui_text(left, 10, 225, C_MUTED);
+    if (right) ui_text(right, 320 - gfx_GetStringWidth(right) - 10, 225, C_MUTED);
+}
+
 static void heading(const char *title) {
-    os_ClrHome();
-    os_PutStrFull(title);
-    os_NewLine();
-    os_PutStrFull("-------------------------");
-    os_NewLine();
+    ui_frame(title, false);
 }
 
 static void line(const char *s) {
-    os_PutStrFull(s);
-    os_NewLine();
+    if (*s) {
+        gfx_SetColor(C_PANEL);
+        gfx_FillRectangle(10, ui_y - 5, 300, 19);
+        ui_text(s, 18, ui_y, C_WHITE);
+    }
+    ui_y += 22;
 }
 
 static void wait_key(void) {
-    line("");
-    line("PRESS ANY KEY: continue");
+    ui_footer("ANY KEY  Continue", NULL);
     while (os_GetCSC()) {}
     while (!os_GetCSC()) {}
     while (os_GetCSC()) {}
 }
 
+static char digit_for_key(uint8_t key) {
+    if (key == sk_0) return '0'; if (key == sk_1) return '1';
+    if (key == sk_2) return '2'; if (key == sk_3) return '3';
+    if (key == sk_4) return '4'; if (key == sk_5) return '5';
+    if (key == sk_6) return '6'; if (key == sk_7) return '7';
+    if (key == sk_8) return '8'; if (key == sk_9) return '9';
+    return 0;
+}
+
+static long double numeric_input(const char *title, const char *prompt,
+                                 const char *hint1, const char *hint2) {
+    char buf[24] = "";
+    size_t len = 0;
+    for (;;) {
+        ui_frame(title, true);
+        ui_text(prompt, 16, 72, C_MUTED);
+        gfx_SetColor(C_PANEL_2); gfx_FillRectangle(14, 92, 292, 48);
+        gfx_SetColor(C_CYAN); gfx_Rectangle(14, 92, 292, 48);
+        gfx_SetTextScale(2, 2);
+        ui_text(len ? buf : "0", 25, 106, len ? C_WHITE : C_MUTED);
+        gfx_SetTextScale(1, 1);
+        if (hint1) ui_text(hint1, 17, 158, C_CYAN);
+        if (hint2) ui_text(hint2, 17, 176, C_MUTED);
+        ui_footer("ENTER  Next", "DEL  Erase");
+        gfx_SwapDraw();
+
+        uint8_t key;
+        while (!(key = os_GetCSC())) {}
+        char digit = digit_for_key(key);
+        if (digit && len < sizeof buf - 1) {
+            buf[len++] = digit; buf[len] = 0;
+        } else if (key == sk_DecPnt && len < sizeof buf - 1) {
+            bool has_dot = false;
+            for (size_t i = 0; i < len; ++i) if (buf[i] == '.') has_dot = true;
+            if (!has_dot) { if (!len) buf[len++] = '0'; buf[len++] = '.'; buf[len] = 0; }
+        } else if (key == sk_Chs && len < sizeof buf - 1) {
+            if (len && buf[0] == '-') { memmove(buf, buf + 1, len); --len; }
+            else { memmove(buf + 1, buf, len + 1); buf[0] = '-'; ++len; }
+        } else if (key == sk_Del && len) buf[--len] = 0;
+        else if (key == sk_Clear) { len = 0; buf[0] = 0; }
+        else if (key == sk_Enter && len && !(len == 1 && buf[0] == '-')) {
+            while (os_GetCSC()) {}
+            return strtold(buf, NULL);
+        }
+        while (os_GetCSC()) {}
+    }
+}
+
 static long double number(const char *title, const char *prompt) {
-    char buf[24];
-    heading(title);
-    os_GetStringInput(prompt, buf, sizeof buf);
-    return strtold(buf, NULL);
+    return numeric_input(title, prompt, "Use (-) for cash paid out", NULL);
 }
 
 static int frequency(const char *title) {
-    char buf[12];
-    heading(title);
-    line("Monthly problem: enter 12");
-    line("Quarterly problem: enter 4");
-    line("Annual problem: enter 1");
-    os_GetStringInput("Periods per year: ", buf, sizeof buf);
-    long double x = strtold(buf, NULL);
+    long double x = numeric_input(title, "Periods per year",
+        "Monthly = 12   Quarterly = 4", "Annual = 1");
     return x > 0 ? (int)(x + 0.5) : 0;
 }
 
 static int period_count(const char *title) {
-    char buf[12];
-    heading(title);
-    line("Use total periods.");
-    line("2 years monthly = 24");
-    line("5 years quarterly = 20");
-    os_GetStringInput("Number of periods: ", buf, sizeof buf);
-    long double x = strtold(buf, NULL);
+    long double x = numeric_input(title, "Total number of periods",
+        "2 years monthly = 24", "5 years quarterly = 20");
     return x >= 0 ? (int)(x + 0.5) : -1;
 }
 
@@ -250,12 +328,24 @@ static void depreciation(void) {
 static int choose(const char *title, const char *const items[], int count) {
     int selected = 0;
     for (;;) {
-        heading(title);
+        const int top = 58;
+        const int item_h = count > 4 ? 30 : 39;
+        ui_frame(title, true);
         for (int i = 0; i < count; ++i) {
-            os_PutStrFull(i == selected ? ">" : " ");
-            line(items[i]);
+            int y = top + i * item_h;
+            bool active = i == selected;
+            gfx_SetColor(active ? C_BLUE : C_PANEL);
+            gfx_FillRectangle(12, y, 296, item_h - 5);
+            if (active) {
+                gfx_SetColor(C_CYAN);
+                gfx_FillRectangle(12, y, 4, item_h - 5);
+            }
+            ui_text(items[i], 25, y + (item_h - 13) / 2,
+                    active ? C_WHITE : C_MUTED);
+            if (active) ui_text(">", 291, y + (item_h - 13) / 2, C_CYAN);
         }
-        line(""); line("ENTER: choose  CLEAR: back");
+        ui_footer("UP/DOWN  Navigate", "ENTER  Select");
+        gfx_SwapDraw();
         uint8_t key;
         while (!(key = os_GetCSC())) {}
         if (key == sk_Clear || key == sk_Mode) return -1;
@@ -627,6 +717,9 @@ int main(void) {
         "Solver cheat guide",
         "Vocabulary definitions"
     };
+    gfx_Begin();
+    gfx_SetPalette(ui_palette, sizeof ui_palette, 0);
+    gfx_SetTextScale(1, 1);
     for (;;) {
         int category = choose("CHOOSE PROBLEM TYPE", main_items, 5);
         if (category < 0) break;
@@ -655,6 +748,6 @@ int main(void) {
             else if (choice == 2) vocabulary();
         }
     }
-    os_ClrHome();
+    gfx_End();
     return 0;
 }

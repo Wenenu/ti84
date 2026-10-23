@@ -2,6 +2,8 @@
 
 TVM Easy is a guided native program for the non-Python TI-84 Plus CE. It includes:
 
+- a full-color graphical interface with highlighted cards, guided step screens, large numeric entry fields, and persistent key hints;
+
 - a general TVM solver for any one missing `N`, `I%`, `PV`, `PMT`, or `FV`, with separate `P/Y` and `C/Y`;
 - future value with end-of-period deposits;
 - the first complete period when savings exceed a target;
@@ -32,7 +34,7 @@ The offline **Solver decision assistant** asks what kind of money is involved an
 
 ## Install and run
 
-Send `bin/TVMEASY.8xp` with TI Connect CE. On OS 5.8, first start arTIfiCE through the Cabri Jr. exploit, select `TVMEASY`, and press Enter. Use Up/Down and Enter in the menu. Clear or Mode exits.
+Send `bin/TVMEASY.8xp` with TI Connect CE. On OS 5.8, first start arTIfiCE through the Cabri Jr. exploit, select `TVMEASY`, and press Enter. Use Up/Down and Enter in the menu. Numeric screens accept the number keys, decimal point, `(-)` for a negative sign, Del to erase, and Enter to continue. Clear or Mode goes back from a menu.
 
 To keep the program through a normal RAM reset, archive it from `2nd` > `MEM` > `Mem Management/Delete` > `Prgm`, highlight `TVMEASY`, and press Enter. A full `Reset All` still deletes third-party programs.
 
