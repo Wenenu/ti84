@@ -14,16 +14,16 @@ enum {
 };
 
 static const uint16_t ui_palette[] = {
-    gfx_RGBTo1555(8, 15, 29),
-    gfx_RGBTo1555(19, 31, 52),
-    gfx_RGBTo1555(29, 45, 70),
-    gfx_RGBTo1555(32, 102, 190),
-    gfx_RGBTo1555(66, 211, 226),
-    gfx_RGBTo1555(244, 248, 255),
-    gfx_RGBTo1555(157, 174, 198),
-    gfx_RGBTo1555(63, 210, 142),
-    gfx_RGBTo1555(245, 101, 101),
-    gfx_RGBTo1555(250, 204, 80)
+    gfx_RGBTo1555(255, 255, 255), /* page background */
+    gfx_RGBTo1555(245, 247, 250), /* cards and footer */
+    gfx_RGBTo1555(255, 255, 255), /* input fields */
+    gfx_RGBTo1555(213, 232, 255), /* selected card/header */
+    gfx_RGBTo1555(0, 70, 150),    /* blue accent */
+    gfx_RGBTo1555(8, 15, 25),     /* primary text */
+    gfx_RGBTo1555(65, 75, 90),    /* secondary text */
+    gfx_RGBTo1555(0, 105, 65),
+    gfx_RGBTo1555(175, 25, 35),
+    gfx_RGBTo1555(130, 80, 0)
 };
 
 static int ui_y;
@@ -80,10 +80,26 @@ static char digit_for_key(uint8_t key) {
     return 0;
 }
 
-static long double numeric_input(const char *title, const char *prompt,
-                                 const char *hint1, const char *hint2) {
+enum input_kind { INPUT_NUMBER, INPUT_FREQUENCY, INPUT_PERIODS };
+
+typedef struct {
+    const char *title;
+    const char *prompt;
+    enum input_kind kind;
+    long double value;
+    bool set;
+} input_field;
+
+static int numeric_input(const char *title, const char *prompt,
+                         const char *hint1, const char *hint2,
+                         long double initial, bool has_initial,
+                         long double *answer) {
     char buf[24] = "";
     size_t len = 0;
+    if (has_initial) {
+        snprintf(buf, sizeof buf, "%.12Lg", initial);
+        len = strlen(buf);
+    }
     for (;;) {
         ui_frame(title, true);
         ui_text(prompt, 16, 72, C_MUTED);
@@ -94,7 +110,7 @@ static long double numeric_input(const char *title, const char *prompt,
         gfx_SetTextScale(1, 1);
         if (hint1) ui_text(hint1, 17, 158, C_CYAN);
         if (hint2) ui_text(hint2, 17, 176, C_MUTED);
-        ui_footer("ENTER  Next", "DEL  Erase");
+        ui_footer("LEFT  Previous", "ENTER  Next");
         gfx_SwapDraw();
 
         uint8_t key;
@@ -111,28 +127,44 @@ static long double numeric_input(const char *title, const char *prompt,
             else { memmove(buf + 1, buf, len + 1); buf[0] = '-'; ++len; }
         } else if (key == sk_Del && len) buf[--len] = 0;
         else if (key == sk_Clear) { len = 0; buf[0] = 0; }
+        else if (key == sk_Left || key == sk_Mode) {
+            while (os_GetCSC()) {}
+            return -1;
+        }
         else if (key == sk_Enter && len && !(len == 1 && buf[0] == '-')) {
             while (os_GetCSC()) {}
-            return strtold(buf, NULL);
+            *answer = strtold(buf, NULL);
+            return 1;
         }
         while (os_GetCSC()) {}
     }
 }
 
-static long double number(const char *title, const char *prompt) {
-    return numeric_input(title, prompt, "Use (-) for cash paid out", NULL);
-}
-
-static int frequency(const char *title) {
-    long double x = numeric_input(title, "Periods per year",
-        "Monthly = 12   Quarterly = 4", "Annual = 1");
-    return x > 0 ? (int)(x + 0.5) : 0;
-}
-
-static int period_count(const char *title) {
-    long double x = numeric_input(title, "Total number of periods",
-        "2 years monthly = 24", "5 years quarterly = 20");
-    return x >= 0 ? (int)(x + 0.5) : -1;
+static bool edit_form(input_field *fields, int count) {
+    int index = 0;
+    while (index < count) {
+        const char *hint1 = "Use (-) for cash paid out";
+        const char *hint2 = NULL;
+        if (fields[index].kind == INPUT_FREQUENCY) {
+            hint1 = "Monthly = 12   Quarterly = 4";
+            hint2 = "Annual = 1";
+        } else if (fields[index].kind == INPUT_PERIODS) {
+            hint1 = "2 years monthly = 24";
+            hint2 = "5 years quarterly = 20";
+        }
+        long double value;
+        int action = numeric_input(fields[index].title, fields[index].prompt,
+            hint1, hint2, fields[index].value, fields[index].set, &value);
+        if (action < 0) {
+            if (index == 0) return false;
+            --index;
+        } else {
+            fields[index].value = value;
+            fields[index].set = true;
+            ++index;
+        }
+    }
+    return true;
 }
 
 static long double periodic_rate(long double annual_percent, int periods_per_year) {
@@ -223,11 +255,16 @@ static void signed_money_line(const char *label, long double value) {
 }
 
 static void savings_value(void) {
-    long double pv = number("BALANCE | STEP 1 OF 5", "Starting balance: ");
-    long double pmt = number("BALANCE | STEP 2 OF 5", "Regular deposit (or 0): ");
-    long double apr = number("BALANCE | STEP 3 OF 5", "Annual interest %: ");
-    int ppy = frequency("BALANCE | STEP 4 OF 5");
-    int n = period_count("BALANCE | STEP 5 OF 5");
+    input_field f[] = {
+        {"BALANCE | STEP 1 OF 5", "Starting balance:", INPUT_NUMBER},
+        {"BALANCE | STEP 2 OF 5", "Regular deposit (or 0):", INPUT_NUMBER},
+        {"BALANCE | STEP 3 OF 5", "Annual interest %:", INPUT_NUMBER},
+        {"BALANCE | STEP 4 OF 5", "Periods per year", INPUT_FREQUENCY},
+        {"BALANCE | STEP 5 OF 5", "Total number of periods", INPUT_PERIODS}
+    };
+    if (!edit_form(f, 5)) return;
+    long double pv=f[0].value, pmt=f[1].value, apr=f[2].value;
+    int ppy=(int)(f[3].value+.5L), n=(int)(f[4].value+.5L);
     if (ppy <= 0 || n < 0 || 1.0 + periodic_rate(apr, ppy) <= 0) {
         heading("ERROR"); line("Check periods and rate."); wait_key(); return;
     }
@@ -239,11 +276,16 @@ static void savings_value(void) {
 }
 
 static void savings_target(void) {
-    long double pv = number("TARGET | STEP 1 OF 5", "Starting balance: ");
-    long double pmt = number("TARGET | STEP 2 OF 5", "Regular deposit (or 0): ");
-    long double apr = number("TARGET | STEP 3 OF 5", "Annual interest %: ");
-    int ppy = frequency("TARGET | STEP 4 OF 5");
-    long double target = number("TARGET | STEP 5 OF 5", "Amount to exceed: ");
+    input_field f[] = {
+        {"TARGET | STEP 1 OF 5", "Starting balance:", INPUT_NUMBER},
+        {"TARGET | STEP 2 OF 5", "Regular deposit (or 0):", INPUT_NUMBER},
+        {"TARGET | STEP 3 OF 5", "Annual interest %:", INPUT_NUMBER},
+        {"TARGET | STEP 4 OF 5", "Periods per year", INPUT_FREQUENCY},
+        {"TARGET | STEP 5 OF 5", "Amount to exceed:", INPUT_NUMBER}
+    };
+    if (!edit_form(f, 5)) return;
+    long double pv=f[0].value, pmt=f[1].value, apr=f[2].value, target=f[4].value;
+    int ppy=(int)(f[3].value+.5L);
     long double r = periodic_rate(apr, ppy), balance = pv;
     int n = 0;
     if (ppy <= 0 || 1.0 + r <= 0 || (pmt <= 0 && r <= 0 && pv <= target)) {
@@ -261,11 +303,16 @@ static void savings_target(void) {
 }
 
 static void standard_loan(void) {
-    long double price = number("LOAN | STEP 1 OF 5", "Purchase price: ");
-    long double down_pct = number("LOAN | STEP 2 OF 5", "Down payment %: ");
-    long double apr = number("LOAN | STEP 3 OF 5", "Annual interest %: ");
-    int ppy = frequency("LOAN | STEP 4 OF 5");
-    long double years = number("LOAN | STEP 5 OF 5", "Length in years: ");
+    input_field f[] = {
+        {"LOAN | STEP 1 OF 5", "Purchase price:", INPUT_NUMBER},
+        {"LOAN | STEP 2 OF 5", "Down payment %:", INPUT_NUMBER},
+        {"LOAN | STEP 3 OF 5", "Annual interest %:", INPUT_NUMBER},
+        {"LOAN | STEP 4 OF 5", "Payments per year", INPUT_FREQUENCY},
+        {"LOAN | STEP 5 OF 5", "Length in years:", INPUT_NUMBER}
+    };
+    if (!edit_form(f, 5)) return;
+    long double price=f[0].value, down_pct=f[1].value, apr=f[2].value, years=f[4].value;
+    int ppy=(int)(f[3].value+.5L);
     int n = (int)floorl(years * ppy + 0.5L);
     long double principal = price * (1.0L - down_pct / 100.0L);
     long double payment = loan_payment(principal, periodic_rate(apr, ppy), n);
@@ -283,11 +330,16 @@ static void standard_loan(void) {
 }
 
 static void faster_loan(void) {
-    long double principal = number("EXTRA PAY | STEP 1 OF 5", "Original loan amount: ");
-    long double apr = number("EXTRA PAY | STEP 2 OF 5", "Annual interest %: ");
-    int ppy = frequency("EXTRA PAY | STEP 3 OF 5");
-    long double years = number("EXTRA PAY | STEP 4 OF 5", "Original years: ");
-    long double payment = number("EXTRA PAY | STEP 5 OF 5", "New larger payment: ");
+    input_field f[] = {
+        {"EXTRA PAY | STEP 1 OF 5", "Original loan amount:", INPUT_NUMBER},
+        {"EXTRA PAY | STEP 2 OF 5", "Annual interest %:", INPUT_NUMBER},
+        {"EXTRA PAY | STEP 3 OF 5", "Payments per year", INPUT_FREQUENCY},
+        {"EXTRA PAY | STEP 4 OF 5", "Original years:", INPUT_NUMBER},
+        {"EXTRA PAY | STEP 5 OF 5", "New larger payment:", INPUT_NUMBER}
+    };
+    if (!edit_form(f, 5)) return;
+    long double principal=f[0].value, apr=f[1].value, years=f[3].value, payment=f[4].value;
+    int ppy=(int)(f[2].value+.5L);
     long double r = periodic_rate(apr, ppy), balance = principal, total = 0.0L;
     int original_n = (int)floorl(years * ppy + 0.5L);
     int full = 0;
@@ -312,9 +364,13 @@ static void faster_loan(void) {
 }
 
 static void depreciation(void) {
-    long double initial = number("VALUE LOSS | STEP 1 OF 3", "Starting value: ");
-    long double final = number("VALUE LOSS | STEP 2 OF 3", "Value at the end: ");
-    long double years = number("VALUE LOSS | STEP 3 OF 3", "Number of years: ");
+    input_field f[] = {
+        {"VALUE LOSS | STEP 1 OF 3", "Starting value:", INPUT_NUMBER},
+        {"VALUE LOSS | STEP 2 OF 3", "Value at the end:", INPUT_NUMBER},
+        {"VALUE LOSS | STEP 3 OF 3", "Number of years:", INPUT_NUMBER}
+    };
+    if (!edit_form(f, 3)) return;
+    long double initial=f[0].value, final=f[1].value, years=f[2].value;
     if (initial <= 0 || final < 0 || final > initial || years <= 0) {
         heading("ERROR"); line("Need 0 <= end <= start."); wait_key(); return;
     }
@@ -394,13 +450,22 @@ static void tvm_solver(enum tvm_mode mode) {
     if (missing < 0) return;
 
     long double n = 0.0L, annual = 0.0L, pv = 0.0L, pmt = 0.0L, fv = 0.0L;
-    if (missing != 0) n = number("TVM | TOTAL PERIODS", "N: ");
-    if (missing != 1) annual = number("TVM | ANNUAL RATE", "I%: ");
-    if (missing != 2) pv = number("TVM | SIGNED VALUE", "PV: ");
-    if (missing != 3) pmt = number("TVM | SIGNED VALUE", "PMT: ");
-    if (missing != 4) fv = number("TVM | SIGNED VALUE", "FV: ");
-    int py = frequency("P/Y | PAYMENT FREQUENCY");
-    int cy = frequency("C/Y | COMPOUNDING");
+    input_field f[6]; int map[6]; int count = 0;
+    static const char *const titles[] = {"TVM | TOTAL PERIODS", "TVM | ANNUAL RATE", "TVM | SIGNED VALUE", "TVM | SIGNED VALUE", "TVM | SIGNED VALUE"};
+    static const char *const prompts[] = {"N:", "I%:", "PV:", "PMT:", "FV:"};
+    for (int i=0;i<5;++i) if (i!=missing) {
+        f[count]=(input_field){titles[i],prompts[i],i==0?INPUT_PERIODS:INPUT_NUMBER,0,false}; map[count++]=i;
+    }
+    f[count]=(input_field){"P/Y | PAYMENT FREQUENCY","Payments per year",INPUT_FREQUENCY,0,false}; map[count++]=5;
+    f[count]=(input_field){"C/Y | COMPOUNDING","Compounds per year",INPUT_FREQUENCY,0,false}; map[count++]=6;
+    if (!edit_form(f,count)) return;
+    int py=0,cy=0;
+    for(int i=0;i<count;++i) {
+        if(map[i]==0)n=f[i].value; else if(map[i]==1)annual=f[i].value;
+        else if(map[i]==2)pv=f[i].value; else if(map[i]==3)pmt=f[i].value;
+        else if(map[i]==4)fv=f[i].value; else if(map[i]==5)py=(int)(f[i].value+.5L);
+        else cy=(int)(f[i].value+.5L);
+    }
     if (py <= 0 || cy <= 0 || (missing != 0 && n < 0.0L)) {
         heading("TVM ERROR"); line("Check N, P/Y, and C/Y."); wait_key(); return;
     }
@@ -456,12 +521,17 @@ static void tvm_solver(enum tvm_mode mode) {
 }
 
 static void outstanding_balance(void) {
-    long double principal = number("BALANCE | STEP 1 OF 6", "Original principal: ");
-    long double annual = number("BALANCE | STEP 2 OF 6", "Annual interest %: ");
-    int py = frequency("BALANCE | STEP 3 OF 6");
-    int cy = frequency("BALANCE | STEP 4 OF 6");
-    long double payment = number("BALANCE | STEP 5 OF 6", "Payment amount (+): ");
-    int made = period_count("BALANCE | STEP 6 OF 6");
+    input_field f[] = {
+        {"BALANCE | STEP 1 OF 6","Original principal:",INPUT_NUMBER},
+        {"BALANCE | STEP 2 OF 6","Annual interest %:",INPUT_NUMBER},
+        {"BALANCE | STEP 3 OF 6","Payments per year",INPUT_FREQUENCY},
+        {"BALANCE | STEP 4 OF 6","Compounds per year",INPUT_FREQUENCY},
+        {"BALANCE | STEP 5 OF 6","Payment amount (+):",INPUT_NUMBER},
+        {"BALANCE | STEP 6 OF 6","Payments already made",INPUT_PERIODS}
+    };
+    if(!edit_form(f,6))return;
+    long double principal=f[0].value,annual=f[1].value,payment=f[4].value;
+    int py=(int)(f[2].value+.5L),cy=(int)(f[3].value+.5L),made=(int)(f[5].value+.5L);
     long double r = tvm_rate(annual, py, cy);
     if (principal < 0.0L || payment < 0.0L || made < 0 || !isfinite(r)) {
         heading("ERROR"); line("Check the entered values."); wait_key(); return;
@@ -474,10 +544,15 @@ static void outstanding_balance(void) {
 }
 
 static void loan_total_interest(void) {
-    long double principal = number("INTEREST | STEP 1 OF 4", "Principal borrowed: ");
-    long double payment = number("INTEREST | STEP 2 OF 4", "Payment amount (+): ");
-    int n = period_count("INTEREST | STEP 3 OF 4");
-    long double outstanding = number("INTEREST | STEP 4 OF 4", "Balance left (or 0): ");
+    input_field f[] = {
+        {"INTEREST | STEP 1 OF 4","Principal borrowed:",INPUT_NUMBER},
+        {"INTEREST | STEP 2 OF 4","Payment amount (+):",INPUT_NUMBER},
+        {"INTEREST | STEP 3 OF 4","Number of payments",INPUT_PERIODS},
+        {"INTEREST | STEP 4 OF 4","Balance left (or 0):",INPUT_NUMBER}
+    };
+    if(!edit_form(f,4))return;
+    long double principal=f[0].value,payment=f[1].value,outstanding=f[3].value;
+    int n=(int)(f[2].value+.5L);
     long double total = payment * n;
     heading("TOTAL INTEREST RESULT");
     money_line("Payments made:", total);
@@ -487,12 +562,17 @@ static void loan_total_interest(void) {
 }
 
 static void annuity_withdrawal(void) {
-    long double fund = number("WITHDRAW | STEP 1 OF 6", "Retirement fund (+): ");
-    long double ending = number("WITHDRAW | STEP 2 OF 6", "Desired ending balance: ");
-    long double annual = number("WITHDRAW | STEP 3 OF 6", "Annual interest %: ");
-    int py = frequency("WITHDRAW | STEP 4 OF 6");
-    int cy = frequency("WITHDRAW | STEP 5 OF 6");
-    int n = period_count("WITHDRAW | STEP 6 OF 6");
+    input_field f[] = {
+        {"WITHDRAW | STEP 1 OF 6","Retirement fund (+):",INPUT_NUMBER},
+        {"WITHDRAW | STEP 2 OF 6","Desired ending balance:",INPUT_NUMBER},
+        {"WITHDRAW | STEP 3 OF 6","Annual interest %:",INPUT_NUMBER},
+        {"WITHDRAW | STEP 4 OF 6","Payments per year",INPUT_FREQUENCY},
+        {"WITHDRAW | STEP 5 OF 6","Compounds per year",INPUT_FREQUENCY},
+        {"WITHDRAW | STEP 6 OF 6","Number of withdrawals",INPUT_PERIODS}
+    };
+    if(!edit_form(f,6))return;
+    long double fund=f[0].value,ending=f[1].value,annual=f[2].value;
+    int py=(int)(f[3].value+.5L),cy=(int)(f[4].value+.5L),n=(int)(f[5].value+.5L);
     long double r = tvm_rate(annual, py, cy), factor = tvm_factor(r, n);
     if (fund < 0.0L || ending < 0.0L || n <= 0 || !isfinite(r) || fabsl(factor) < EPS) {
         heading("ERROR"); line("Check the entered values."); wait_key(); return;
@@ -506,12 +586,17 @@ static void annuity_withdrawal(void) {
 }
 
 static void annuity_balance(void) {
-    long double fund = number("REMAIN | STEP 1 OF 6", "Retirement fund (+): ");
-    long double withdrawal = number("REMAIN | STEP 2 OF 6", "Withdrawal amount (+): ");
-    long double annual = number("REMAIN | STEP 3 OF 6", "Annual interest %: ");
-    int py = frequency("REMAIN | STEP 4 OF 6");
-    int cy = frequency("REMAIN | STEP 5 OF 6");
-    int n = period_count("REMAIN | STEP 6 OF 6");
+    input_field f[] = {
+        {"REMAIN | STEP 1 OF 6","Retirement fund (+):",INPUT_NUMBER},
+        {"REMAIN | STEP 2 OF 6","Withdrawal amount (+):",INPUT_NUMBER},
+        {"REMAIN | STEP 3 OF 6","Annual interest %:",INPUT_NUMBER},
+        {"REMAIN | STEP 4 OF 6","Payments per year",INPUT_FREQUENCY},
+        {"REMAIN | STEP 5 OF 6","Compounds per year",INPUT_FREQUENCY},
+        {"REMAIN | STEP 6 OF 6","Number of withdrawals",INPUT_PERIODS}
+    };
+    if(!edit_form(f,6))return;
+    long double fund=f[0].value,withdrawal=f[1].value,annual=f[2].value;
+    int py=(int)(f[3].value+.5L),cy=(int)(f[4].value+.5L),n=(int)(f[5].value+.5L);
     long double r = tvm_rate(annual, py, cy);
     if (fund < 0.0L || withdrawal < 0.0L || n < 0 || !isfinite(r)) {
         heading("ERROR"); line("Check the entered values."); wait_key(); return;

@@ -34,7 +34,7 @@ The offline **Solver decision assistant** asks what kind of money is involved an
 
 ## Install and run
 
-Send `bin/TVMEASY.8xp` with TI Connect CE. On OS 5.8, first start arTIfiCE through the Cabri Jr. exploit, select `TVMEASY`, and press Enter. Use Up/Down and Enter in the menu. Numeric screens accept the number keys, decimal point, `(-)` for a negative sign, Del to erase, and Enter to continue. Clear or Mode goes back from a menu.
+Send `bin/TVMEASY.8xp` with TI Connect CE. On OS 5.8, first start arTIfiCE through the Cabri Jr. exploit, select `TVMEASY`, and press Enter. Use Up/Down and Enter in the menu. Numeric screens accept the number keys, decimal point, `(-)` for a negative sign, Del to erase, and Enter to continue. Press Left on any input screen to return to the previous field; its saved value appears for editing, and the corrected value is used in the result. Clear erases the current field. Mode also moves back and exits when used on the first field.
 
 To keep the program through a normal RAM reset, archive it from `2nd` > `MEM` > `Mem Management/Delete` > `Prgm`, highlight `TVMEASY`, and press Enter. A full `Reset All` still deletes third-party programs.
 
